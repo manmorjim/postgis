@@ -1,9 +1,10 @@
-## 2.5.1.8+carto-1
+## 2.5.3.1+carto-1
 
-**Release date**: 20XX-XX-XX
+**Release date**: 2019-11-11
 
 Changes:
-- Backport 570fbdb10: Fix oversimplification of polygon inner rings
+- Backport 570fbdb10: Fix oversimplification of polygon inner rings.
+- Merged community `stable-2.5` as of 2019-11-11: Backport fixes leaks and schemas qualifications
 
 ## 2.5.1.7+carto-1
 
