@@ -22,14 +22,14 @@
  *
  **********************************************************************/
 
+#include <string.h>
+
 #include "mvt.h"
 #include "lwgeom_geos.h"
+#include "pgsql_compat.h"
 
 #ifdef HAVE_LIBPROTOBUF
-
-#if POSTGIS_PGSQL_VERSION >= 94
 #include "utils/jsonb.h"
-#endif
 
 #if POSTGIS_PGSQL_VERSION < 110
 /* See trac ticket #3867 */
@@ -333,22 +333,16 @@ static void parse_column_keys(mvt_agg_context *ctx)
 
 	for (i = 0; i < natts; i++)
 	{
-#if POSTGIS_PGSQL_VERSION < 110
-		Oid typoid = getBaseType(ctx->column_cache.tupdesc->attrs[i]->atttypid);
-		char *tkey = ctx->column_cache.tupdesc->attrs[i]->attname.data;
-#else
-		Oid typoid = getBaseType(ctx->column_cache.tupdesc->attrs[i].atttypid);
-		char *tkey = ctx->column_cache.tupdesc->attrs[i].attname.data;
-#endif
+		Oid typoid = getBaseType(TupleDescAttr(ctx->column_cache.tupdesc, i)->atttypid);
+		char *tkey = TupleDescAttr(ctx->column_cache.tupdesc, i)->attname.data;
 
 		ctx->column_cache.column_oid[i] = typoid;
-#if POSTGIS_PGSQL_VERSION >= 94
+
 		if (typoid == JSONBOID)
 		{
 			ctx->column_cache.column_keys_index[i] = UINT32_MAX;
 			continue;
 		}
-#endif
 
 		if (ctx->geom_name == NULL)
 		{
@@ -547,7 +541,6 @@ static void parse_datum_as_string(mvt_agg_context *ctx, Oid typoid,
 	add_value_as_string(ctx, value, tags, k);
 }
 
-#if POSTGIS_PGSQL_VERSION >= 94
 static uint32_t *parse_jsonb(mvt_agg_context *ctx, Jsonb *jb,
 	uint32_t *tags)
 {
@@ -625,7 +618,6 @@ static uint32_t *parse_jsonb(mvt_agg_context *ctx, Jsonb *jb,
 
 	return tags;
 }
-#endif
 
 static void parse_values(mvt_agg_context *ctx)
 {
@@ -667,15 +659,10 @@ static void parse_values(mvt_agg_context *ctx)
 			continue;
 		}
 
-#if POSTGIS_PGSQL_VERSION < 110
-		key = cc.tupdesc->attrs[i]->attname.data;
-#else
-		key = cc.tupdesc->attrs[i].attname.data;
-#endif
+		key = TupleDescAttr(cc.tupdesc, i)->attname.data;
 		k = cc.column_keys_index[i];
 		typoid = cc.column_oid[i];
 
-#if POSTGIS_PGSQL_VERSION >= 94
 		if (k == UINT32_MAX && typoid != JSONBOID)
 			elog(ERROR, "parse_values: unexpectedly could not find parsed key name '%s'", key);
 		if (typoid == JSONBOID)
@@ -683,10 +670,6 @@ static void parse_values(mvt_agg_context *ctx)
 			tags = parse_jsonb(ctx, DatumGetJsonbP(datum), tags);
 			continue;
 		}
-#else
-		if (k == UINT32_MAX)
-			elog(ERROR, "parse_values: unexpectedly could not find parsed key name '%s'", key);
-#endif
 
 		switch (typoid)
 		{
@@ -718,6 +701,7 @@ static void parse_values(mvt_agg_context *ctx)
 			parse_datum_as_string(ctx, typoid, datum, tags, k);
 			break;
 		}
+
 		ctx->row_columns++;
 	}
 
@@ -1066,6 +1050,48 @@ mvt_clip_and_validate_geos(LWGEOM *lwgeom, uint8_t basic_type, uint32_t extent, 
 	return ng;
 }
 
+#ifdef HAVE_WAGYU
+
+#include "lwgeom_wagyu.h"
+
+static LWGEOM *
+mvt_clip_and_validate(LWGEOM *lwgeom, uint8_t basic_type, uint32_t extent, uint32_t buffer, bool clip_geom)
+{
+	GBOX clip_box = {0};
+	LWGEOM *clipped_lwgeom;
+
+	/* Wagyu only supports polygons. Default to geos for other types */
+	lwgeom = lwgeom_to_basic_type(lwgeom, POLYGONTYPE);
+	if (lwgeom->type != POLYGONTYPE && lwgeom->type != MULTIPOLYGONTYPE)
+	{
+		return mvt_clip_and_validate_geos(lwgeom, basic_type, extent, buffer, clip_geom);
+	}
+
+	if (!clip_geom)
+	{
+		/* With clipping disabled, we request a clip with the geometry bbox to force validation */
+		lwgeom_calculate_gbox(lwgeom, &clip_box);
+	}
+	else
+	{
+		clip_box.xmax = clip_box.ymax = (double)extent + (double)buffer;
+		clip_box.xmin = clip_box.ymin = -(double)buffer;
+	}
+
+	clipped_lwgeom = lwgeom_wagyu_clip_by_box(lwgeom, &clip_box);
+
+	return clipped_lwgeom;
+}
+
+#else /* ! HAVE_WAGYU */
+
+static LWGEOM *
+mvt_clip_and_validate(LWGEOM *lwgeom, uint8_t basic_type, uint32_t extent, uint32_t buffer, bool clip_geom)
+{
+	return mvt_clip_and_validate_geos(lwgeom, basic_type, extent, buffer, clip_geom);
+}
+#endif
+
 /**
  * Transform a geometry into vector tile coordinate space.
  *
@@ -1093,12 +1119,6 @@ LWGEOM *mvt_geom(LWGEOM *lwgeom, const GBOX *gbox, uint32_t extent, uint32_t buf
 	if (lwgeom_is_empty(lwgeom))
 		return NULL;
 
-	if (width == 0 || height == 0)
-		elog(ERROR, "mvt_geom: bounds width or height cannot be 0");
-
-	if (extent == 0)
-		elog(ERROR, "mvt_geom: extent cannot be 0");
-
 	resx = width / extent;
 	resy = height / extent;
 	res = (resx < resy ? resx : resy)/2;
@@ -1121,14 +1141,14 @@ LWGEOM *mvt_geom(LWGEOM *lwgeom, const GBOX *gbox, uint32_t extent, uint32_t buf
 	affine.yoff = -gbox->ymax * fy;
 	lwgeom_affine(lwgeom, &affine);
 
-	/* snap to integer precision, removing duplicate points */
+	/* Snap to integer precision, removing duplicate points */
 	lwgeom_grid_in_place(lwgeom, &grid);
 
-	if (lwgeom == NULL || lwgeom_is_empty(lwgeom))
+	if (!lwgeom || lwgeom_is_empty(lwgeom))
 		return NULL;
 
-	lwgeom = mvt_clip_and_validate_geos(lwgeom, basic_type, extent, buffer, clip_geom);
-	if (lwgeom == NULL || lwgeom_is_empty(lwgeom))
+	lwgeom = mvt_clip_and_validate(lwgeom, basic_type, extent, buffer, clip_geom);
+	if (!lwgeom || lwgeom_is_empty(lwgeom))
 		return NULL;
 
 	return lwgeom;
@@ -1179,7 +1199,7 @@ void mvt_agg_init_context(mvt_agg_context *ctx)
  * Expands features array if needed by a factor of 2.
  * Allocates a new feature, increment feature counter and
  * encode geometry and properties into it.
- */
+ */
 void mvt_agg_transfn(mvt_agg_context *ctx)
 {
 	bool isnull = false;
@@ -1300,7 +1320,7 @@ mvt_agg_context * mvt_ctx_deserialize(const bytea *ba)
 		NULL
 	};
 
-	size_t len = VARSIZE(ba) - VARHDRSZ;
+	size_t len = VARSIZE_ANY_EXHDR(ba);
 	VectorTile__Tile *tile = vector_tile__tile__unpack(&allocator, len, (uint8_t*)VARDATA(ba));
 	mvt_agg_context *ctx = palloc(sizeof(mvt_agg_context));
 	memset(ctx, 0, sizeof(mvt_agg_context));

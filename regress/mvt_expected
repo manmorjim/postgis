@@ -1,3 +1,8 @@
+I1|
+I2|
+ERROR:  ST_AsMVTGeom: Geometric bounds are too small
+ERROR:  ST_AsMVTGeom: Extent must be greater than 0
+ERROR:  ST_AsMVTGeom: Extent must be greater than 0
 PG1|POINT(1 4094)
 PG2|POINT(0 4095)
 PG3|POINT(2 4092)
@@ -116,7 +121,7 @@ D7|POINT(1 4094)
 TU2
 ERROR:  pgis_asmvt_transfn: parameter row cannot be other than a rowtype
 TU3|
-#3922|t
+#3922|ST_Polygon
 #4294_Horizontal|LINESTRING(0 10,0 5)
 #4294_Vertical|LINESTRING(0 10,5 10)
 #4314|
