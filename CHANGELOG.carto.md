@@ -3,9 +3,6 @@
 **Release date**: 2019-12-16
 
 Changes:
-- Backport [a4a040c](https://github.com/postgis/postgis/commit/a4a040c4949089f32b63e6a647d1d9696992a132): Avoid throwing during update if st_union(geometry) doesn't exist.
-- Backport [81754c5](https://github.com/postgis/postgis/commit/81754c50035bd6efb8751786cfc08bd09b284c6d): ST_AddPoint: Accept -1 as a valid position.
-- Backport [3158f39](https://github.com/postgis/postgis/commit/3158f39e5bf75798b4e68fce855e7c669bb10c5f): rtpg_mapalgebra.c: Remove warning against PG12.
 - Merged community `stable-2.5` as of 2019-12-16: Backport fixes and adding a security notice.
 
 ## 2.5.3.1+carto-1
