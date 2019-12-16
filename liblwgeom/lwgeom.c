@@ -1599,20 +1599,23 @@ void lwgeom_set_srid(LWGEOM *geom, int32_t srid)
 /**************************************************************/
 
 
-void
+int
 lwgeom_remove_repeated_points_in_place(LWGEOM *geom, double tolerance)
 {
+	int geometry_modified = LW_FALSE;
 	switch (geom->type)
 	{
 		/* No-op! Cannot remote points */
 		case POINTTYPE:
 		case TRIANGLETYPE:
-			return;
+			return geometry_modified;
 		case LINETYPE:
 		{
 			LWLINE *g = (LWLINE*)(geom);
 			POINTARRAY *pa = g->points;
+			uint32_t npoints = pa->npoints;
 			ptarray_remove_repeated_points_in_place(pa, tolerance, 2);
+			geometry_modified = npoints != pa->npoints;
 			/* Invalid output */
 			if (pa->npoints == 1 && pa->maxpoints > 1)
 			{
@@ -1630,13 +1633,17 @@ lwgeom_remove_repeated_points_in_place(LWGEOM *geom, double tolerance)
 			{
 				POINTARRAY *pa = g->rings[i];
 				int minpoints = 4;
+				uint32_t npoints = 0;
 				/* Skip zero'ed out rings */
 				if(!pa)
 					continue;
+				npoints = pa->npoints;
 				ptarray_remove_repeated_points_in_place(pa, tolerance, minpoints);
+				geometry_modified |= npoints != pa->npoints;
 				/* Drop collapsed rings */
 				if(pa->npoints < 4)
 				{
+					geometry_modified = LW_TRUE;
 					ptarray_free(pa);
 					continue;
 				}
@@ -1657,7 +1664,8 @@ lwgeom_remove_repeated_points_in_place(LWGEOM *geom, double tolerance)
 			int use_heap = (mpt->ngeoms > out_stack_size);
 
 			/* No-op on empty */
-			if (mpt->ngeoms == 0) return;
+			if (mpt->ngeoms < 2)
+				return geometry_modified;
 
 			/* We cannot write directly back to the multipoint */
 			/* geoms array because we're reading out of it still */
@@ -1694,14 +1702,15 @@ lwgeom_remove_repeated_points_in_place(LWGEOM *geom, double tolerance)
 			/* Copy remaining points back into the input */
 			/* array */
 			memcpy(mpt->geoms, out, sizeof(LWPOINT *) * n);
+			geometry_modified = mpt->ngeoms != n;
 			mpt->ngeoms = n;
 			if (use_heap) lwfree(out);
-			return;
+			break;
 		}
 
 		case CIRCSTRINGTYPE:
 			/* Dunno how to handle these, will return untouched */
-			return;
+			return geometry_modified;
 
 		/* Can process most multi* types as generic collection */
 		case MULTILINETYPE:
@@ -1721,7 +1730,7 @@ lwgeom_remove_repeated_points_in_place(LWGEOM *geom, double tolerance)
 			{
 				LWGEOM *g = col->geoms[i];
 				if (!g) continue;
-				lwgeom_remove_repeated_points_in_place(g, tolerance);
+				geometry_modified |= lwgeom_remove_repeated_points_in_place(g, tolerance);
 				/* Drop zero'ed out geometries */
 				if(lwgeom_is_empty(g))
 				{
@@ -1740,37 +1749,47 @@ lwgeom_remove_repeated_points_in_place(LWGEOM *geom, double tolerance)
 			break;
 		}
 	}
-	return;
+
+	if (geometry_modified)
+	{
+		lwgeom_drop_bbox(geom);
+	}
+	return geometry_modified;
 }
 
 
 /**************************************************************/
 
-void
+int
 lwgeom_simplify_in_place(LWGEOM *geom, double epsilon, int preserve_collapsed)
 {
+	int modified = LW_FALSE;
 	switch (geom->type)
 	{
 		/* No-op! Cannot simplify points or triangles */
 		case POINTTYPE:
-			return;
+			return modified;
 		case TRIANGLETYPE:
 		{
 			if (preserve_collapsed)
-				return;
+				return modified;
 			LWTRIANGLE *t = lwgeom_as_lwtriangle(geom);
 			POINTARRAY *pa = t->points;
 			ptarray_simplify_in_place(pa, epsilon, 0);
 			if (pa->npoints < 3)
 			{
 				pa->npoints = 0;
+				modified = LW_TRUE;
 			}
+			break;
 		}
 		case LINETYPE:
 		{
 			LWLINE *g = (LWLINE*)(geom);
 			POINTARRAY *pa = g->points;
+			uint32_t in_npoints = pa->npoints;
 			ptarray_simplify_in_place(pa, epsilon, 2);
+			modified = in_npoints != pa->npoints;
 			/* Invalid output */
 			if (pa->npoints == 1 && pa->maxpoints > 1)
 			{
@@ -1806,12 +1825,28 @@ lwgeom_simplify_in_place(LWGEOM *geom, double epsilon, int preserve_collapsed)
 				/* Skip zero'ed out rings */
 				if(!pa)
 					continue;
+				uint32_t in_npoints = pa->npoints;
 				ptarray_simplify_in_place(pa, epsilon, minpoints);
+				modified |= in_npoints != pa->npoints;
 				/* Drop collapsed rings */
 				if(pa->npoints < 4)
 				{
-					ptarray_free(pa);
-					continue;
+					if (i == 0)
+					{
+						/* If the outter ring is dropped, all can be dropped */
+						for (i = 0; i < g->nrings; i++)
+						{
+							pa = g->rings[i];
+							ptarray_free(pa);
+						}
+						break;
+					}
+					else
+					{
+						/* Drop this inner ring only */
+						ptarray_free(pa);
+						continue;
+					}
 				}
 				g->rings[j++] = pa;
 			}
@@ -1832,7 +1867,7 @@ lwgeom_simplify_in_place(LWGEOM *geom, double epsilon, int preserve_collapsed)
 			{
 				LWGEOM *g = col->geoms[i];
 				if (!g) continue;
-				lwgeom_simplify_in_place(g, epsilon, preserve_collapsed);
+				modified |= lwgeom_simplify_in_place(g, epsilon, preserve_collapsed);
 				/* Drop zero'ed out geometries */
 				if(lwgeom_is_empty(g))
 				{
@@ -1851,7 +1886,12 @@ lwgeom_simplify_in_place(LWGEOM *geom, double epsilon, int preserve_collapsed)
 			break;
 		}
 	}
-	return;
+
+	if (modified)
+	{
+		lwgeom_drop_bbox(geom);
+	}
+	return modified;
 }
 
 LWGEOM* lwgeom_simplify(const LWGEOM *igeom, double dist, int preserve_collapsed)
@@ -2156,8 +2196,9 @@ lwgeom_startpoint(const LWGEOM *lwgeom, POINT4D *pt)
 	}
 }
 
-void
-lwgeom_grid_in_place(LWGEOM *geom, const gridspec *grid)
+/* Grids in place. *fun* will be used to grid ptarrays in polygons (but not in points or lines) */
+static void
+lwgeom_grid_in_place_fn(LWGEOM *geom, const gridspec *grid, void (*fun)(POINTARRAY *, const gridspec *))
 {
 	if (!geom) return;
 	switch ( geom->type )
@@ -2187,7 +2228,7 @@ lwgeom_grid_in_place(LWGEOM *geom, const gridspec *grid)
 			/* Check first the external ring */
 			uint32_t i = 0;
 			POINTARRAY *pa = ply->rings[0];
-			ptarray_grid_in_place(pa, grid);
+			fun(pa, grid);
 			if (pa->npoints < 4)
 			{
 				/* External ring collapsed: free everything */
@@ -2204,7 +2245,7 @@ lwgeom_grid_in_place(LWGEOM *geom, const gridspec *grid)
 			for (i = 1; i < ply->nrings; i++)
 			{
 				POINTARRAY *pa = ply->rings[i];
-				ptarray_grid_in_place(pa, grid);
+				fun(pa, grid);
 
 				/* Skip bad rings */
 				if (pa->npoints >= 4)
@@ -2233,7 +2274,7 @@ lwgeom_grid_in_place(LWGEOM *geom, const gridspec *grid)
 			for (i = 0; i < col->ngeoms; i++)
 			{
 				LWGEOM *g = col->geoms[i];
-				lwgeom_grid_in_place(g, grid);
+				lwgeom_grid_in_place_fn(g, grid, fun);
 				/* Empty geoms need to be freed */
 				/* before we move on */
 				if (lwgeom_is_empty(g))
@@ -2255,6 +2296,18 @@ lwgeom_grid_in_place(LWGEOM *geom, const gridspec *grid)
 	}
 }
 
+void
+lwgeom_grid_in_place(LWGEOM *geom, const gridspec *grid)
+{
+	lwgeom_grid_in_place_fn(geom, grid, ptarray_grid_in_place);
+}
+
+void
+lwgeom_grid_mvt_in_place(LWGEOM *geom)
+{
+	gridspec grid = {0, 0, 0, 0, 1, 1, 0, 0};
+	lwgeom_grid_in_place_fn(geom, &grid, ptarray_grid_mvt_in_place);
+}
 
 LWGEOM *
 lwgeom_grid(const LWGEOM *lwgeom, const gridspec *grid)

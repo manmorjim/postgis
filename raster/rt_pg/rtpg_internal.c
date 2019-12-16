@@ -60,9 +60,9 @@ rtpg_strreplace(
 	const char *tmp = str;
 	char *result;
 	int found = 0;
-	int length, reslen;
-	int oldlen = strlen(oldstr);
-	int newlen = strlen(newstr);
+	int64_t length, reslen;
+	size_t oldlen = strlen(oldstr);
+	size_t newlen = strlen(newstr);
 	int limit = (count != NULL && *count > 0) ? *count : -1;
 
 	tmp = str;
@@ -127,11 +127,11 @@ rtpg_chartrim(const char *input, char *remove) {
 		offset++;
 
 	rtn = palloc(sizeof(char) * (strlen(input) - offset + 1));
-	if (rtn == NULL) {
+	if (!rtn) {
 		fprintf(stderr, "Not enough memory\n");
 		return NULL;
 	}
-	strncpy(rtn, input, strlen(input) - offset);
+	memcpy(rtn, input, strlen(input) - offset);
 	rtn[strlen(input) - offset] = '\0';
 
 	return rtn;

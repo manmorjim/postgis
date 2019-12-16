@@ -1799,12 +1799,7 @@ PG_FUNCTION_INFO_V1(LWGEOM_isempty);
 Datum LWGEOM_isempty(PG_FUNCTION_ARGS)
 {
 	GSERIALIZED *geom = PG_GETARG_GSERIALIZED_P(0);
-	LWGEOM *lwgeom = lwgeom_from_gserialized(geom);
-	bool empty = lwgeom_is_empty(lwgeom);
-
-	lwgeom_free(lwgeom);
-	PG_FREE_IF_COPY(geom, 0);
-	PG_RETURN_BOOL(empty);
+	PG_RETURN_BOOL(gserialized_is_empty(geom));
 }
 
 
@@ -2230,7 +2225,7 @@ Datum LWGEOM_removepoint(PG_FUNCTION_ARGS)
 {
 	GSERIALIZED *pglwg1, *result;
 	LWLINE *line, *outline;
-	uint32 which;
+	int32 which;
 
 	POSTGIS_DEBUG(2, "LWGEOM_removepoint called.");
 
@@ -2245,9 +2240,9 @@ Datum LWGEOM_removepoint(PG_FUNCTION_ARGS)
 
 	line = lwgeom_as_lwline(lwgeom_from_gserialized(pglwg1));
 
-	if ( which > line->points->npoints-1 )
+	if (which < 0 || (uint32_t)which > line->points->npoints - 1)
 	{
-		elog(ERROR, "Point index out of range (%d..%d)", 0, line->points->npoints-1);
+		elog(ERROR, "Point index out of range (%u..%u)", 0, line->points->npoints - 1);
 		PG_RETURN_NULL();
 	}
 
@@ -2257,7 +2252,7 @@ Datum LWGEOM_removepoint(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 	}
 
-	outline = lwline_removepoint(line, which);
+	outline = lwline_removepoint(line, (uint32_t)which);
 	/* Release memory */
 	lwline_free(line);
 
@@ -2276,7 +2271,7 @@ Datum LWGEOM_setpoint_linestring(PG_FUNCTION_ARGS)
 	LWLINE *line;
 	LWPOINT *lwpoint;
 	POINT4D newpoint;
-	int32 which;
+	int64_t which;
 
 	POSTGIS_DEBUG(2, "LWGEOM_setpoint_linestring called.");
 
@@ -2308,11 +2303,11 @@ Datum LWGEOM_setpoint_linestring(PG_FUNCTION_ARGS)
 	}
 	if(which < 0){
 		/* Use backward indexing for negative values */
-		which = which + line->points->npoints ;
+		which += (int64_t)line->points->npoints;
 	}
-	if ( (uint32_t)which + 1 > line->points->npoints )
+	if ((uint32_t)which > line->points->npoints - 1)
 	{
-		elog(ERROR, "abs(Point index) out of range (-)(%d..%d)", 0, line->points->npoints-1);
+		elog(ERROR, "abs(Point index) out of range (-)(%u..%u)", 0, line->points->npoints - 1);
 		PG_RETURN_NULL();
 	}
 
@@ -2759,37 +2754,31 @@ Datum ST_RemoveRepeatedPoints(PG_FUNCTION_ARGS);
 PG_FUNCTION_INFO_V1(ST_RemoveRepeatedPoints);
 Datum ST_RemoveRepeatedPoints(PG_FUNCTION_ARGS)
 {
-	GSERIALIZED *g_in = PG_GETARG_GSERIALIZED_P(0);
-	int type = gserialized_get_type(g_in);
+	GSERIALIZED *g_in = PG_GETARG_GSERIALIZED_P_COPY(0);
+	uint32_t type = gserialized_get_type(g_in);
 	GSERIALIZED *g_out;
 	LWGEOM *lwgeom_in = NULL;
-	LWGEOM *lwgeom_out = NULL;
 	double tolerance = 0.0;
+	int modified = LW_FALSE;
 
 	/* Don't even start to think about points */
-	if ( type == POINTTYPE )
+	if (type == POINTTYPE)
 		PG_RETURN_POINTER(g_in);
 
-	if ( PG_NARGS() > 1 && ! PG_ARGISNULL(1) )
+	if (PG_NARGS() > 1 && !PG_ARGISNULL(1))
 		tolerance = PG_GETARG_FLOAT8(1);
 
 	lwgeom_in = lwgeom_from_gserialized(g_in);
-	lwgeom_out = lwgeom_remove_repeated_points(lwgeom_in, tolerance);
-
-	/* COMPUTE_BBOX TAINTING */
-	if (lwgeom_in->bbox)
-		lwgeom_refresh_bbox(lwgeom_out);
-
-	g_out = geometry_serialize(lwgeom_out);
-
-	if ( lwgeom_out != lwgeom_in )
+	modified = lwgeom_remove_repeated_points_in_place(lwgeom_in, tolerance);
+	if (!modified)
 	{
-		lwgeom_free(lwgeom_out);
+		/* Since there were no changes, we can return the input to avoid the serialization */
+		PG_RETURN_POINTER(g_in);
 	}
 
-	lwgeom_free(lwgeom_in);
+	g_out = geometry_serialize(lwgeom_in);
 
-	PG_FREE_IF_COPY(g_in, 0);
+	pfree(g_in);
 	PG_RETURN_POINTER(g_out);
 }
 

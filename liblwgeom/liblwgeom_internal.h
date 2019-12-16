@@ -202,7 +202,7 @@ uint32_t lwcollection_count_vertices(LWCOLLECTION *col);
 /**
  * @param minpts minimum number of points to retain, if possible.
  */
-void ptarray_simplify_in_place(POINTARRAY *pa, double epsilon, uint32_t minpts);
+void ptarray_simplify_in_place(POINTARRAY *pa, double tolerance, uint32_t minpts);
 
 /*
 * The possible ways a pair of segments can interact. Returned by lw_segment_intersects
@@ -280,6 +280,12 @@ double lwtriangle_area(const LWTRIANGLE *triangle);
 * it is not, return LW_FAILURE.
 */
 int gserialized_read_gbox_p(const GSERIALIZED *g, GBOX *gbox);
+
+/*
+ * Populate a bounding box *without* allocating an LWGEOM. Useful for some performance
+ * purposes. Use only if gserialized_read_gbox_p failed
+ */
+int gserialized_peek_gbox_p(const GSERIALIZED *g, GBOX *gbox);
 
 /*
 * Length calculations
@@ -436,6 +442,8 @@ gridspec;
 LWGEOM* lwgeom_grid(const LWGEOM *lwgeom, const gridspec *grid);
 void lwgeom_grid_in_place(LWGEOM *lwgeom, const gridspec *grid);
 void ptarray_grid_in_place(POINTARRAY *pa, const gridspec *grid);
+void lwgeom_grid_mvt_in_place(LWGEOM *lwgeom);
+void ptarray_grid_mvt_in_place(POINTARRAY *pa, const gridspec *grid);
 
 /*
 * What side of the line formed by p1 and p2 does q fall?
